@@ -1,0 +1,11 @@
+src/
+tests/
+.gitignore
+.npmignore
+jest.config.js
+tsconfig.json
+*.log
+.env
+.github/
+CONTRIBUTING.md
+CHANGELOG.md

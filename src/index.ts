@@ -1,6 +1,6 @@
 // Import required dependencies
 import { createClient } from '@supabase/supabase-js'
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 import { Database } from './types'
 
 // Define valid Supabase database operations
@@ -41,73 +41,78 @@ interface TestResult {
  error?: string;          // Error message if test failed
 }
 
-// Main class that handles all RLS testing functionality
+interface RLSPolicy {
+ table_name: string;
+ policy_name: string;
+ definition: string;
+ command: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
+ permissive: 'PERMISSIVE' | 'RESTRICTIVE';
+}
+
+interface TestCase {
+ method: SupabaseMethod;
+ path: string;
+ body?: any;
+ queryParams?: Record<string, string>;
+ headers?: Record<string, string>;
+ expectedStatus: number;
+ description: string;
+}
+
+interface TestResult {
+ test: TestCase;
+ success: boolean;
+ actual: number;
+ expected: number;
+ error?: string;
+}
+
 export class SupabaseAITester {
- // Private instances of Supabase and OpenAI clients
  private supabase
- private openai
- 
- // Default configuration settings
+ private claude
+
  private config = {
-   testTimeout: 5000,      // Maximum time (ms) for each test
-   retryAttempts: 3,       // Number of retries for failed tests
-   verbose: true           // Whether to show detailed logs
+   testTimeout: 5000,
+   retryAttempts: 3,
+   verbose: true
  }
 
- // Initialize the tester with required credentials and optional config
  constructor({
    supabaseUrl,
    supabaseKey,
-   openaiKey,
+   claudeKey,
    config = {}
  }: {
-   supabaseUrl: string     // Your Supabase project URL
-   supabaseKey: string     // Must be service_role key for RLS access
-   openaiKey: string       // Your OpenAI API key
+   supabaseUrl: string
+   supabaseKey: string
+   claudeKey: string
    config?: Partial<{
      testTimeout: number
      retryAttempts: number
      verbose: boolean
    }>
  }) {
-   // Initialize Supabase client with strong typing
    this.supabase = createClient<Database>(supabaseUrl, supabaseKey)
-   
-   // Initialize OpenAI client
-   this.openai = new OpenAI({ apiKey: openaiKey })
-   
-   // Merge provided config with defaults
+   this.claude = new Anthropic({ apiKey: claudeKey })
    this.config = { ...this.config, ...config }
  }
 
- // Main method to run RLS tests for a specific table
  async runRLSTests(tableName: string): Promise<TestResult[]> {
    try {
-     // Step 1: Get RLS policies
      const policies = await this.getRLSPolicies(tableName)
-     
-     // Step 2: Generate test cases using AI
      const testCases = await this.generateTestCases(policies)
-     
-     // Step 3: Execute the tests
      const results = await this.executeTests(testCases)
-     
-     // Step 4: Generate and return report
      return this.generateReport(results)
    } catch (error) {
-     // Proper error handling
      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
      throw new Error(`RLS Test failed: ${errorMessage}`)
    }
  }
 
- // Fetch RLS policies from Supabase with proper typing
  private async getRLSPolicies(tableName: string): Promise<RLSPolicy[]> {
-   // Call Supabase RPC to get policies
    const { data, error } = await this.supabase
      .rpc('get_policies', { table_name: tableName })
 
-   // Handle potential errors
    if (error) {
      throw new Error(`Failed to get RLS policies: ${error.message}`)
    }
@@ -115,32 +120,27 @@ export class SupabaseAITester {
    return data as RLSPolicy[]
  }
 
- // Generate test cases using OpenAI with proper error handling
  private async generateTestCases(policies: RLSPolicy[]): Promise<TestCase[]> {
    try {
-     // Create detailed prompt for AI
-     const prompt = `
-       Generate test cases for these RLS policies:
-       ${JSON.stringify(policies, null, 2)}
-       
-       Include tests for:
-       1. Basic CRUD operations
-       2. Edge cases
-       3. Security vulnerabilities
-     `
-
-     // Get response from OpenAI
-     const aiResponse = await this.openai.chat.completions.create({
-       model: "gpt-4",
-       messages: [{ role: "user", content: prompt }]
+     const message = await this.claude.messages.create({
+       model: "claude-3-sonnet-20240229",
+       max_tokens: 1000,
+       messages: [{
+         role: "user",
+         content: `Generate test cases for these RLS policies:
+           ${JSON.stringify(policies, null, 2)}
+           Include tests for:
+           1. Basic CRUD operations
+           2. Edge cases
+           3. Security vulnerabilities`
+       }]
      })
 
-     const content = aiResponse.choices[0].message.content
+     const content = message.content[0].text
      if (!content) {
-       throw new Error('OpenAI response was empty')
+       throw new Error('Claude response was empty')
      }
 
-     // Parse and validate AI response
      return this.parseAIResponse(content)
    } catch (error) {
      throw new Error(`AI test generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
