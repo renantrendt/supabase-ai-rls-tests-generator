@@ -110,18 +110,21 @@ export class SupabaseAITester {
  }
 
  private async getRLSPolicies(tableName: string): Promise<RLSPolicy[]> {
-   const { data, error } = await this.supabase
-     .rpc('get_policies', { table_name: tableName })
+    console.log('Fetching policies for table:', tableName);
+    const { data, error } = await this.supabase
+        .rpc('get_policies', { target_table: tableName })
 
    if (error) {
+    console.log('Error fetching policies:', error);
      throw new Error(`Failed to get RLS policies: ${error.message}`)
    }
-
+   console.log('Received policies:', data);
    return data as RLSPolicy[]
  }
 
  private async generateTestCases(policies: RLSPolicy[]): Promise<TestCase[]> {
    try {
+    console.log('Generating test cases with Claude...');
      const message = await this.claude.messages.create({
        model: "claude-3-sonnet-20240229",
        max_tokens: 1000,
@@ -132,10 +135,11 @@ export class SupabaseAITester {
            Include tests for:
            1. Basic CRUD operations
            2. Edge cases
-           3. Security vulnerabilities`
+           3. Security vulnerabilities
+           4. Format response as JSON array of test cases`
        }]
      })
-
+     console.log('Claude response:', message.content[0].text);
      const content = message.content[0].text
      if (!content) {
        throw new Error('Claude response was empty')
@@ -143,6 +147,7 @@ export class SupabaseAITester {
 
      return this.parseAIResponse(content)
    } catch (error) {
+    console.error('Error generating test cases:', error);
      throw new Error(`AI test generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
    }
  }
@@ -304,7 +309,7 @@ export class SupabaseAITester {
 const tester = new SupabaseAITester({
   supabaseUrl: 'your-project-url',
   supabaseKey: 'your-service-role-key',
-  openaiKey: 'your-openai-key',
+  ClaudeKey: 'your-claude-key',
   config: {
     verbose: true
   }

@@ -18,7 +18,7 @@ import { SupabaseAITester } from 'supabase-ai-tester'
 const tester = new SupabaseAITester({
  supabaseUrl: process.env.SUPABASE_URL,
  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
- openaiKey: process.env.OPENAI_API_KEY
+ claudeKey: process.env.OPENAI_KEY
 })
 
 ## Run tests for specific table

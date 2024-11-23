@@ -1,23 +1,20 @@
-import dotenv from 'dotenv';
-dotenv.config();
-//console.log('SUPABASE_URL:', process.env.SUPABASE_URL);
-
 import { SupabaseAITester } from '../src'
+import { describe, it, expect } from '@jest/globals'
+import dotenv from 'dotenv'
+
+dotenv.config()
 
 describe('SupabaseAITester', () => {
-  let tester: SupabaseAITester
-
-  beforeEach(() => {
-    tester = new SupabaseAITester({
-      supabaseUrl: process.env.SUPABASE_URL!,
-      supabaseKey: process.env.SUPABASE_KEY!,
-      claudeKey: process.env.CLAUDE_API_KEY!
+    const tester = new SupabaseAITester({
+        supabaseUrl: process.env.SUPABASE_URL || '',
+        supabaseKey: process.env.SUPABASE_KEY || '',
+        claudeKey: process.env.CLAUDE_KEY || ''
     })
-  })
 
-  it('should test RLS policies', async () => {
-    const results = await tester.runRLSTests('users')
-    expect(results).toBeDefined()
-    expect(Array.isArray(results)).toBe(true)
-  })
+    // Added longer timeout
+    it('should test RLS policies', async () => {
+        const results = await tester.runRLSTests('posts')
+        expect(results).toBeDefined()
+        expect(Array.isArray(results)).toBe(true)
+    }, 30000)  // Increased timeout to 30 seconds
 })
