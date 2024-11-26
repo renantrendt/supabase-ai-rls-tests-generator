@@ -1,9 +1,10 @@
 {
   "name": "supabase-ai-rls-tests-generator",
-  "version": "1.0.12",
+  "version": "1.0.15",
   "description": "Claude Sonnet will fetch your RLS policies from Supabase, then generate test cases (including edge cases), run the tests and save the tests and results specific files.",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
+  "type": "commonjs",
   "bin": {
     "setup-tests": "./bin/wizard.js",
     "test-rls": "./bin/run-tests.js"
@@ -11,7 +12,7 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "rls-test": "ts-node -T rls-test.ts",
+    "rls-test": "node rls-test.js",
     "setup": "node ./bin/wizard.js",
     "prepublishOnly": "npm run build",
     "clean": "rimraf dist",
@@ -58,6 +59,10 @@
     "type": "git",
     "url": "git+https://github.com/renantrendt/supabase-ai-rls-tests-generator.git"
   },
+  "bugs": {
+    "url": "https://github.com/renantrendt/supabase-ai-rls-tests-generator/issues"
+  },
+  "homepage": "https://github.com/renantrendt/supabase-ai-rls-tests-generator#readme",
   "engines": {
     "node": ">=14.0.0"
   }

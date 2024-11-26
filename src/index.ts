@@ -6,8 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import { Database } from './types';
 
-// Load environment variables from .env.rls-tests
-config({ path: resolve(process.cwd(), '.env.rls-tests') });
+// Load environment variables from .env.rls-test
+config({ path: resolve(process.cwd(), '.env.rls-test') });
 
 type SupabaseMethod = 'select' | 'insert' | 'update' | 'delete' | 'upsert';
 
@@ -117,17 +117,35 @@ export class SupabaseAITester {
       console.log('Fetching policies for table:', tableName);
     }
     
-    const { data, error } = await this.supabase
-      .rpc('get_policies', { target_table: tableName });
+    try {
+      const { data, error } = await this.supabase
+        .rpc('get_policies', { target_table: tableName });
 
-    if (error) {
-      throw new Error(`Failed to get RLS policies: ${error.message}`);
-    }
+      if (error) {
+        if (error.message.includes('Could not find the function')) {
+          throw new Error(
+            'The get_policies function is not installed in your Supabase database. ' +
+            'Please check the documentation for installation instructions or run the SQL setup script ' +
+            'in your Supabase SQL editor.'
+          );
+        }
+        throw new Error(`Failed to get RLS policies: ${error.message}`);
+      }
 
-    if (this.config.verbose) {
-      console.log('Received policies:', data);
+      if (!data || data.length === 0) {
+        console.warn('No RLS policies found for table:', tableName);
+      }
+
+      if (this.config.verbose) {
+        console.log('Received policies:', data);
+      }
+      return data as RLSPolicy[];
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new Error(`Failed to get RLS policies: ${error.message}`);
+      }
+      throw new Error('Unknown error while fetching RLS policies');
     }
-    return data as RLSPolicy[];
   }
 
   private async generateTestCases(policies: RLSPolicy[]): Promise<TestCase[]> {

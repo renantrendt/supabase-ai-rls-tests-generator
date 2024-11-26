@@ -79,52 +79,30 @@ async function createDirectories(): Promise<void> {
 // Main Functions
 async function handleEnvVars(vars: EnvVars): Promise<void> {
   try {
-    const envPath = '.env';
-    const tempPath = '.env.temp';
-    let finalContent = '';
+    const envPath = '.env.rls-test';
+    let envContent = '# Supabase RLS Tests Generator Configuration\n';
+
+    // Add our variables
+    envContent += `SUPABASE_RLS_URL=${vars.supabaseUrl}\n`;
+    envContent += `SUPABASE_RLS_KEY=${vars.supabaseKey}\n`;
+    envContent += `SUPABASE_RLS_CLAUDE_KEY=${vars.claudeKey}\n`;
+
+    // Write to env file
+    await writeFile(envPath, envContent);
+    console.log(chalk.green(`✓ Environment variables saved to ${envPath}`));
     
-    // Read existing .env if it exists
-    if (fs.existsSync(envPath)) {
-      const currentEnv = fs.readFileSync(envPath, 'utf8');
-      
-      // Split into lines and filter out any existing RLS variables
-      const lines = currentEnv.split('\n').filter(line => 
-        !line.startsWith('SUPABASE_RLS_URL=') &&
-        !line.startsWith('SUPABASE_RLS_KEY=') &&
-        !line.startsWith('SUPABASE_RLS_CLAUDE_KEY=')
-      );
-      
-      // Ensure there's a newline at the end if we have content
-      finalContent = lines.length > 0 ? lines.join('\n') + '\n' : '';
+    // Add to .gitignore if not already there
+    let gitignore = '';
+    const gitignorePath = '.gitignore';
+    
+    if (fs.existsSync(gitignorePath)) {
+      gitignore = fs.readFileSync(gitignorePath, 'utf8');
     }
-
-    // Add our new variables
-    const newVars = `
-# Supabase RLS Tests Generator Configuration
-SUPABASE_RLS_URL=${vars.supabaseUrl}
-SUPABASE_RLS_KEY=${vars.supabaseKey}
-SUPABASE_RLS_CLAUDE_KEY=${vars.claudeKey}
-`;
-
-    finalContent += newVars;
-
-    // Write to temp file first
-    await writeFile(tempPath, finalContent);
-
-    // Verify temp file was written correctly
-    if (fs.existsSync(tempPath)) {
-      // Backup existing .env if it exists
-      if (fs.existsSync(envPath)) {
-        const backupPath = '.env.backup';
-        fs.copyFileSync(envPath, backupPath);
-        console.log(chalk.yellow('✓ Created backup of existing .env at .env.backup'));
-      }
-
-      // Replace .env with our temp file
-      fs.renameSync(tempPath, envPath);
-      console.log(chalk.green('✓ Successfully updated .env with RLS variables'));
-    } else {
-      throw new Error('Failed to create temporary env file');
+    
+    if (!gitignore.includes('.env.rls-test')) {
+      const updatedGitignore = gitignore + (gitignore.endsWith('\n') ? '' : '\n') + '.env.rls-test\n';
+      await writeFile(gitignorePath, updatedGitignore);
+      console.log(chalk.green('✓ Added .env.rls-test to .gitignore'));
     }
 
   } catch (error) {
@@ -135,18 +113,23 @@ SUPABASE_RLS_CLAUDE_KEY=${vars.claudeKey}
 }
 
 async function createTestFile(): Promise<void> {
-  const testFileContent = `require('dotenv').config();
+  const testFileContent = `// Load environment variables from .env.rls-test
+require('dotenv').config({ path: '.env.rls-test' });
+
+// Import the tester class
 const { SupabaseAITester } = require('supabase-ai-rls-tests-generator');
 
+// Create tester instance
 const tester = new SupabaseAITester({
-  supabaseUrl: process.env.SUPABASE_RLS_URL,
-  supabaseKey: process.env.SUPABASE_RLS_KEY,
-  claudeKey: process.env.SUPABASE_RLS_CLAUDE_KEY,
+  supabaseUrl: process.env.SUPABASE_RLS_URL || '',
+  supabaseKey: process.env.SUPABASE_RLS_KEY || '',
+  claudeKey: process.env.SUPABASE_RLS_CLAUDE_KEY || '',
   config: {
     verbose: true
   }
 });
 
+// Run the tests
 async function runTests() {
   try {
     // Change 'your_table_name' to the table you want to test
@@ -154,10 +137,14 @@ async function runTests() {
     console.log('Test Results:', results);
   } catch (error) {
     console.error('Test Error:', error);
+    process.exit(1);
   }
 }
 
-runTests();`;
+runTests().catch(error => {
+  console.error('Test Error:', error);
+  process.exit(1);
+});`;
 
   try {
     await writeFile('rls-test.js', testFileContent);
@@ -187,7 +174,7 @@ async function runTests(): Promise<void> {
   return new Promise((resolve, reject) => {
     console.log(chalk.blue('\nRunning tests automatically...'));
     
-    const testProcess = spawn('npx', ['node', 'rls-test.js'], {
+    const testProcess = spawn('node', ['rls-test.js'], {
       stdio: 'inherit',
       env: { ...process.env }
     });
@@ -244,16 +231,17 @@ export async function wizard(): Promise<void> {
 Setup Complete! 🎉
 
 Created files and directories:
-- Updated .env with RLS test variables (backup created as .env.backup)
+- .env.rls-test (separate environment file for RLS tests)
 - rls-test.js
 - generated/
   ├── tests/
   └── results/
 
 Next steps:
-1. Edit rls-test.js to specify your table name
-2. Run tests with: npm run rls-test
-   Or: npx test-rls
+1. Your environment variables are stored in .env.rls-test
+2. Edit rls-test.js to specify your table name
+3. Run tests with: node rls-test.js
+   Or: npm run rls-test
 `));
 
     // Ask if they want to run tests now
