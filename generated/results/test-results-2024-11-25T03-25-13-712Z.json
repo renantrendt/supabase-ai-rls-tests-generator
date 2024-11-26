@@ -1,0 +1,88 @@
+{
+  "timestamp": "2024-11-25T03-25-13-712Z",
+  "total": 5,
+  "passed": 1,
+  "failed": 4,
+  "details": [
+    {
+      "test": {
+        "method": "select",
+        "path": "posts",
+        "description": "Verify that a user can read a post they created",
+        "body": {
+          "user_id": "123e4567-e89b-12d3-a456-426614174000",
+          "title": "My First Post",
+          "content": "This is the content of my first post."
+        },
+        "expectedStatus": 200
+      },
+      "success": true,
+      "actual": 200,
+      "expected": 200
+    },
+    {
+      "test": {
+        "method": "select",
+        "path": "posts",
+        "description": "Verify that a user cannot read a post created by another user",
+        "body": {
+          "user_id": "987e6543-e21b-54d9-c876-940518762000",
+          "title": "Someone Else's Post",
+          "content": "This post was created by another user."
+        },
+        "expectedStatus": 401
+      },
+      "success": false,
+      "actual": 200,
+      "expected": 401
+    },
+    {
+      "test": {
+        "method": "insert",
+        "path": "posts",
+        "description": "Verify that a user can create a new post",
+        "body": {
+          "user_id": "123e4567-e89b-12d3-a456-426614174000",
+          "title": "My Second Post",
+          "content": "This is the content of my second post."
+        },
+        "expectedStatus": 200
+      },
+      "success": false,
+      "actual": 201,
+      "expected": 200
+    },
+    {
+      "test": {
+        "method": "insert",
+        "path": "posts",
+        "description": "Verify that a user cannot create a post with another user's ID",
+        "body": {
+          "user_id": "987e6543-e21b-54d9-c876-940518762000",
+          "title": "Post with Wrong User ID",
+          "content": "This post should not be created."
+        },
+        "expectedStatus": 401
+      },
+      "success": false,
+      "actual": 201,
+      "expected": 401
+    },
+    {
+      "test": {
+        "method": "insert",
+        "path": "posts",
+        "description": "Verify that a user cannot create a post without a title",
+        "body": {
+          "user_id": "123e4567-e89b-12d3-a456-426614174000",
+          "content": "This post should not be created due to missing title."
+        },
+        "expectedStatus": 400
+      },
+      "success": false,
+      "actual": 400,
+      "expected": 400,
+      "error": "null value in column \"title\" of relation \"posts\" violates not-null constraint"
+    }
+  ]
+}

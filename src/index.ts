@@ -1,11 +1,15 @@
-// First, remove all the current content of src/index.ts
-// Then replace with this complete implementation:
+import { createClient } from '@supabase/supabase-js';
+import Anthropic from '@anthropic-ai/sdk';
+import { config } from 'dotenv';
+import { resolve } from 'path';
+import fs from 'fs';
+import path from 'path';
+import { Database } from './types';
 
-import { createClient } from '@supabase/supabase-js'
-import Anthropic from '@anthropic-ai/sdk'
-import { Database } from './types'
+// Load environment variables from .env.rls-tests
+config({ path: resolve(process.cwd(), '.env.rls-tests') });
 
-type SupabaseMethod = 'select' | 'insert' | 'update' | 'delete' | 'upsert'
+type SupabaseMethod = 'select' | 'insert' | 'update' | 'delete' | 'upsert';
 
 interface RLSPolicy {
   table_name: string;
@@ -57,6 +61,11 @@ export class SupabaseAITester {
       verbose: boolean;
     }>;
   }) {
+    // Validate required parameters
+    if (!supabaseUrl || !supabaseKey || !claudeKey) {
+      throw new Error('Missing required parameters. Please ensure supabaseUrl, supabaseKey, and claudeKey are provided.');
+    }
+
     this.supabase = createClient<Database>(supabaseUrl, supabaseKey);
     this.claude = new Anthropic({ apiKey: claudeKey });
     this.config = {
@@ -65,14 +74,37 @@ export class SupabaseAITester {
       verbose: true,
       ...config
     };
+
+    // Ensure required directories exist
+    this.initializeDirectories();
+  }
+
+  private initializeDirectories(): void {
+    const dirs = ['generated', 'generated/tests', 'generated/results'];
+    dirs.forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    });
   }
 
   async runRLSTests(tableName: string): Promise<TestResult[]> {
     try {
-      console.log('Starting RLS tests for table:', tableName);
+      if (this.config.verbose) {
+        console.log('Starting RLS tests for table:', tableName);
+      }
+
       const policies = await this.getRLSPolicies(tableName);
       const testCases = await this.generateTestCases(policies);
+      
+      // Save generated tests
+      await this.saveTestCases(testCases);
+      
       const results = await this.executeTests(testCases);
+      
+      // Save test results
+      await this.saveResults(results);
+      
       return this.generateReport(results);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -81,7 +113,9 @@ export class SupabaseAITester {
   }
 
   private async getRLSPolicies(tableName: string): Promise<RLSPolicy[]> {
-    console.log('Fetching policies for table:', tableName);
+    if (this.config.verbose) {
+      console.log('Fetching policies for table:', tableName);
+    }
     
     const { data, error } = await this.supabase
       .rpc('get_policies', { target_table: tableName });
@@ -90,14 +124,14 @@ export class SupabaseAITester {
       throw new Error(`Failed to get RLS policies: ${error.message}`);
     }
 
-    console.log('Received policies:', data);
+    if (this.config.verbose) {
+      console.log('Received policies:', data);
+    }
     return data as RLSPolicy[];
   }
 
   private async generateTestCases(policies: RLSPolicy[]): Promise<TestCase[]> {
     try {
-      console.log('Generating test cases with Claude...');
-      
       const message = await this.claude.messages.create({
         model: "claude-3-sonnet-20240229",
         max_tokens: 1000,
@@ -106,26 +140,42 @@ export class SupabaseAITester {
           content: `Generate test cases for these Supabase RLS policies:
             ${JSON.stringify(policies, null, 2)}
             
-            Return a JSON array where each test case has this exact structure:
+            Table structure:
+            - id: UUID (auto-generated)
+            - user_id: UUID (required)
+            - title: TEXT (required)
+            - content: TEXT (optional)
+            
+            Return a JSON array where each test case has this structure:
             {
               "name": "string",
               "description": "string",
               "method": "select" | "insert" | "update" | "delete",
               "path": "posts",
-              "body": { object with test data },
+              "body": { 
+                "user_id": "uuid-string",  // Example: "123e4567-e89b-12d3-a456-426614174000"
+                "title": "string",         // Required field
+                "content": "string"        // Optional field
+              },
               "expectedStatus": number
             }
             
-            Do not include any explanatory text or markdown formatting.
+            Important:
+            - user_id must be in UUID format
+            - title is required
+            - Use consistent UUIDs across related tests
+            - Include both positive and negative test cases
+            - Test edge cases for each policy
+            
             Return only the JSON array.`
         }]
       });
-
+         
       const content = message.content[0].text;
       if (!content) {
         throw new Error('Claude response was empty');
       }
-
+   
       return this.parseAIResponse(content);
     } catch (error) {
       console.error('Error generating test cases:', error);
@@ -135,7 +185,9 @@ export class SupabaseAITester {
 
   private parseAIResponse(content: string): TestCase[] {
     try {
-      console.log('Parsing AI response...');
+      if (this.config.verbose) {
+        console.log('Parsing AI response...');
+      }
       
       // Remove any markdown formatting or extra text
       const jsonMatch = content.match(/\[[\s\S]*\]/);
@@ -144,7 +196,9 @@ export class SupabaseAITester {
       }
 
       const jsonString = jsonMatch[0];
-      console.log('Cleaned JSON string:', jsonString);
+      if (this.config.verbose) {
+        console.log('Cleaned JSON string:', jsonString);
+      }
       
       const parsed = JSON.parse(jsonString);
       if (!Array.isArray(parsed)) {
@@ -159,7 +213,9 @@ export class SupabaseAITester {
         expectedStatus: test.expectedStatus
       }));
 
-      console.log('Parsed test cases:', testCases);
+      if (this.config.verbose) {
+        console.log('Parsed test cases:', testCases);
+      }
       return testCases;
     } catch (error) {
       console.error('Parse error:', error);
@@ -177,6 +233,42 @@ export class SupabaseAITester {
         setTimeout(() => reject(new Error('Test timeout')), timeoutMs)
       )
     ]);
+  }
+
+  private async saveTestCases(testCases: TestCase[]) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join('generated', 'tests', `test-cases-${timestamp}.json`);
+    
+    await fs.promises.writeFile(
+      filePath,
+      JSON.stringify(testCases, null, 2)
+    );
+    
+    if (this.config.verbose) {
+      console.log(`Test cases saved to: ${filePath}`);
+    }
+  }
+   
+  private async saveResults(results: TestResult[]) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join('generated', 'results', `test-results-${timestamp}.json`);
+    
+    const summary = {
+      timestamp,
+      total: results.length,
+      passed: results.filter(r => r.success).length,
+      failed: results.filter(r => !r.success).length,
+      details: results
+    };
+   
+    await fs.promises.writeFile(
+      filePath,
+      JSON.stringify(summary, null, 2)
+    );
+    
+    if (this.config.verbose) {
+      console.log(`Test results saved to: ${filePath}`);
+    }
   }
 
   private async executeTests(testCases: TestCase[]): Promise<TestResult[]> {
