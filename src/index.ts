@@ -4,38 +4,19 @@ import { config } from 'dotenv';
 import { resolve } from 'path';
 import fs from 'fs';
 import path from 'path';
-import { Database } from './types';
+import chalk from 'chalk';
+import { 
+  Database, 
+  TestConfig, 
+  RLSPolicy, 
+  TestCase, 
+  TestResult, 
+  TestSummary, 
+  SupabaseMethod 
+} from './types';
 
 // Load environment variables from .env.rls-test
 config({ path: resolve(process.cwd(), '.env.rls-test') });
-
-type SupabaseMethod = 'select' | 'insert' | 'update' | 'delete' | 'upsert';
-
-interface RLSPolicy {
-  table_name: string;
-  policy_name: string;
-  definition: string;
-  command: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
-  permissive: 'PERMISSIVE' | 'RESTRICTIVE';
-}
-
-interface TestCase {
-  method: SupabaseMethod;
-  path: string;
-  body?: any;
-  queryParams?: Record<string, string>;
-  headers?: Record<string, string>;
-  expectedStatus: number;
-  description: string;
-}
-
-interface TestResult {
-  test: TestCase;
-  success: boolean;
-  actual: number;
-  expected: number;
-  error?: string;
-}
 
 export class SupabaseAITester {
   private supabase;
@@ -45,6 +26,7 @@ export class SupabaseAITester {
     retryAttempts: number;
     verbose: boolean;
   };
+  private startTime: number = 0;
 
   constructor({
     supabaseUrl,
@@ -61,7 +43,6 @@ export class SupabaseAITester {
       verbose: boolean;
     }>;
   }) {
-    // Validate required parameters
     if (!supabaseUrl || !supabaseKey || !claudeKey) {
       throw new Error('Missing required parameters. Please ensure supabaseUrl, supabaseKey, and claudeKey are provided.');
     }
@@ -75,7 +56,6 @@ export class SupabaseAITester {
       ...config
     };
 
-    // Ensure required directories exist
     this.initializeDirectories();
   }
 
@@ -88,27 +68,94 @@ export class SupabaseAITester {
     });
   }
 
-  async runRLSTests(tableName: string): Promise<TestResult[]> {
+  async runRLSTests(tableName: string, testConfig?: TestConfig): Promise<TestResult[]> {
+    this.startTime = Date.now();
     try {
       if (this.config.verbose) {
         console.log('Starting RLS tests for table:', tableName);
       }
 
       const policies = await this.getRLSPolicies(tableName);
-      const testCases = await this.generateTestCases(policies);
+
+      const config: TestConfig = testConfig || {
+        coverage: 'basic',
+        testCount: 4
+      };
+      const testCases = await this.generateTestCases(policies, config);
       
-      // Save generated tests
       await this.saveTestCases(testCases);
-      
       const results = await this.executeTests(testCases);
-      
-      // Save test results
       await this.saveResults(results);
       
-      return this.generateReport(results);
+      return this.generateReport(results, tableName);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`RLS Test failed: ${errorMessage}`);
+    }
+  }
+
+  private formatTestCounts({ total, passed, failed }: { total: number, passed: number, failed: number }) {
+    return failed > 0 
+      ? `${chalk.red(`${failed} failed`)}, ${chalk.green(`${passed} passed`)} of ${total} total`
+      : chalk.green(`All ${total} tests passed`);
+  }
+
+  private calculateStats(results: TestResult[]) {
+    return {
+      total: results.length,
+      passed: results.filter(r => r.success).length,
+      failed: results.filter(r => !r.success).length,
+      coverage: (results.filter(r => r.success).length / results.length) * 100,
+      time: Date.now() - this.startTime,
+      timestamp: new Date().toISOString().replace(/[:.]/g, '-')
+    };
+  }
+
+  private formatTime(ms: number): string {
+    return `${(ms / 1000).toFixed(2)}s`;
+  }
+
+  private formatCoverage(coverage: number): string {
+    return `${coverage.toFixed(1)}%`;
+  }
+
+  private async getAISQLSuggestion(error: string, tableName: string): Promise<string | null> {
+    try {
+      const message = await this.claude.messages.create({
+        model: "claude-3-sonnet-20240229",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: `Given this Supabase error for table "${tableName}":
+          "${error}"
+          
+          Provide ONLY the SQL command needed to fix this issue.
+          Return ONLY the SQL, no explanations or markdown.`
+        }]
+      });
+  
+      return message.content[0].text || null;
+    } catch (error) {
+      console.error('Error getting AI SQL suggestion:', error);
+      return null;
+    }
+  }
+  
+  private async printFailedTests(results: TestResult[], tableName: string): Promise<void> {
+    for (const result of results.filter(r => !r.success)) {
+      console.log(chalk.red(`\n  • ${result.test.description}`));
+      console.log(`    Expected: ${result.expected}, Got: ${result.actual}`);
+      
+      if (result.error) {
+        console.log(chalk.gray(`    Error: ${result.error}`));
+        
+        // Get AI suggestion
+        const sqlSuggestion = await this.getAISQLSuggestion(result.error, tableName);
+        if (sqlSuggestion) {
+          console.log(chalk.yellow('\n    To fix this, run this SQL in Supabase:'));
+          console.log(chalk.gray(`    ${sqlSuggestion.replace(/\n/g, '\n    ')}`));
+        }
+      }
     }
   }
 
@@ -148,92 +195,118 @@ export class SupabaseAITester {
     }
   }
 
-  private async generateTestCases(policies: RLSPolicy[]): Promise<TestCase[]> {
+  private async generateTestCases(policies: RLSPolicy[], config: TestConfig): Promise<TestCase[]> {
     try {
+      const tableName = policies[0]?.table_name.split('.')[1] || 'unknown';
+      let promptContent = '';
+   
+      switch(config.coverage) {
+        case 'basic':
+          promptContent = `Generate ${config.testCount || 4} test cases focusing on:
+          - Successful and failed SELECT operations
+          - Successful and failed INSERT operations
+          For each case, test both authorized and unauthorized scenarios.`;
+          break;
+        case 'full':
+          promptContent = `Generate ${config.testCount || 8} test cases covering complete CRUD:
+          - CREATE: Insert with valid/invalid data
+          - READ: Select with proper/improper permissions
+          - UPDATE: Modify own/others' records
+          - DELETE: Remove with/without authorization
+          Include equal distribution of operations and both success/failure cases.`;
+          break;
+        case 'edge':
+          promptContent = `Generate ${config.testCount || 12} comprehensive test cases including:
+          - All CRUD operations (success/failure)
+          - Edge cases:
+            * Empty/null values
+            * Boundary conditions
+            * Invalid data types
+          - Security scenarios:
+            * Permission escalation attempts
+            * Cross-user access attempts
+            * SQL injection prevention
+          - Data validation edge cases
+          Include thorough coverage of security implications.`;
+          break;
+      }
+   
       const message = await this.claude.messages.create({
         model: "claude-3-sonnet-20240229",
-        max_tokens: 1000,
+        max_tokens: 3000, // Increased for larger test sets
         messages: [{
           role: "user",
-          content: `Generate test cases for these Supabase RLS policies:
+          content: `Based on these RLS policies:
             ${JSON.stringify(policies, null, 2)}
             
-            Table structure:
-            - id: UUID (auto-generated)
-            - user_id: UUID (required)
-            - title: TEXT (required)
-            - content: TEXT (optional)
+            ${promptContent}
             
-            Return a JSON array where each test case has this structure:
+            Format each test case EXACTLY as:
             {
-              "name": "string",
-              "description": "string",
               "method": "select" | "insert" | "update" | "delete",
-              "path": "posts",
-              "body": { 
-                "user_id": "uuid-string",  // Example: "123e4567-e89b-12d3-a456-426614174000"
-                "title": "string",         // Required field
-                "content": "string"        // Optional field
+              "path": "${tableName}",
+              "description": "clear description of test purpose and expected behavior",
+              "body": {
+                "user_id": "uuid-format-string",
+                // additional fields based on operation
               },
-              "expectedStatus": number
+              "expectedStatus": number (200 for success, 4xx for failures)
             }
-            
-            Important:
-            - user_id must be in UUID format
-            - title is required
-            - Use consistent UUIDs across related tests
-            - Include both positive and negative test cases
-            - Test edge cases for each policy
-            
-            Return only the JSON array.`
+   
+            Return ONLY a JSON array containing these test cases.
+            Number of test cases MUST match: ${config.testCount || 'default for coverage level'}
+            DO NOT include any explanation or markdown - only the JSON array.`
         }]
       });
-         
+           
       const content = message.content[0].text;
       if (!content) {
         throw new Error('Claude response was empty');
       }
-   
+     
       return this.parseAIResponse(content);
     } catch (error) {
       console.error('Error generating test cases:', error);
       throw new Error(`AI test generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-  }
+   }
 
   private parseAIResponse(content: string): TestCase[] {
     try {
-      if (this.config.verbose) {
-        console.log('Parsing AI response...');
-      }
-      
-      // Remove any markdown formatting or extra text
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        throw new Error('No JSON array found in response');
+      //if (this.config.verbose) {
+        //console.log('Parsing AI response...');
+      //}
+
+      const fullArrayMatch = content.match(/\[\s*{[\s\S]*}\s*\]/);
+      if (!fullArrayMatch) {
+        const jsonObjects = content.match(/{[^{}]*}/g);
+        if (!jsonObjects) {
+          throw new Error('No valid JSON content found');
+        }
+
+        content = `[${jsonObjects.join(',')}]`;
+      } else {
+        content = fullArrayMatch[0];
       }
 
-      const jsonString = jsonMatch[0];
-      if (this.config.verbose) {
-        console.log('Cleaned JSON string:', jsonString);
-      }
-      
-      const parsed = JSON.parse(jsonString);
+      //if (this.config.verbose) {
+       // console.log('Cleaned JSON:', content);
+      //}
+
+      const parsed = JSON.parse(content);
+
       if (!Array.isArray(parsed)) {
-        throw new Error('Response is not an array');
+        throw new Error('Parsed content is not an array');
       }
 
-      const testCases = parsed.map(test => ({
-        method: test.method.toLowerCase() as SupabaseMethod,
+      const testCases = parsed.map((test: any) => ({
+        method: (test.method || 'select').toLowerCase() as SupabaseMethod,
         path: test.path,
-        description: test.description,
-        body: test.body,
-        expectedStatus: test.expectedStatus
+        description: test.description || 'No description provided',
+        body: test.body || null,
+        expectedStatus: test.expectedStatus || 200
       }));
 
-      if (this.config.verbose) {
-        console.log('Parsed test cases:', testCases);
-      }
       return testCases;
     } catch (error) {
       console.error('Parse error:', error);
@@ -271,24 +344,63 @@ export class SupabaseAITester {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filePath = path.join('generated', 'results', `test-results-${timestamp}.json`);
     
-    const summary = {
+    const stats = this.calculateStats(results);
+    const summary: TestSummary = {
       timestamp,
-      total: results.length,
-      passed: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      details: results
-    };
-   
+      total: stats.total,
+      passed: stats.passed,
+      failed: stats.failed,
+      coverage: stats.coverage,
+      timeInMs: stats.time,
+      failedTests: results
+        .filter(r => !r.success)
+        .map(r => ({
+          description: r.test.description,
+          expected: r.expected,
+          actual: r.actual,
+          error: r.error,
+          sqlSuggestion: r.error ? 
+            (r.error.includes('permission denied') ? 
+              `ALTER TABLE ${r.test.path} ENABLE ROW LEVEL SECURITY;` : 
+              undefined
+            ) : undefined
+        })),
+      details: results // Just pass the results directly
+     };
+  
     await fs.promises.writeFile(
       filePath,
       JSON.stringify(summary, null, 2)
     );
     
     if (this.config.verbose) {
-      console.log(`Test results saved to: ${filePath}`);
+      console.log(chalk.blue(`\n📁 Results saved to: ${filePath}`));
     }
   }
+  private generateReport(results: TestResult[], tableName: string): TestResult[] {
+    console.log(chalk.bold('\n📊 Test Summary'));
+    console.log('━'.repeat(50));
+    
+    const stats = this.calculateStats(results);
+    console.log(`${chalk.bold('Results')}: ${this.formatTestCounts(stats)}`);
+    console.log(`${chalk.bold('Time')}: ${this.formatTime(stats.time)}`);
+    console.log(`${chalk.bold('Coverage')}: ${this.formatCoverage(stats.coverage)}`);
+    
+    if (stats.failed > 0) {
+      console.log(chalk.red('\n❌ Failed Tests:'));
+      this.printFailedTests(results, tableName);
+      
+      // Show complete RLS template if most tests failed
+      //if (stats.failed > stats.total / 2) {
+       // console.log(chalk.yellow('\n💡 Need a complete RLS setup? Here\'s a template:'));
+       // console.log(chalk.gray(SQLHelper.getPolicyTemplate(tableName)));
+     // }
+    } else {
+      console.log(chalk.green('\n✅ All tests passed!'));
+    }
 
+    return results;
+  }
   private async executeTests(testCases: TestCase[]): Promise<TestResult[]> {
     const results: TestResult[] = [];
 
@@ -374,20 +486,5 @@ export class SupabaseAITester {
         expected: test.expectedStatus
       };
     }, this.config.testTimeout);
-  }
-
-  private generateReport(results: TestResult[]): TestResult[] {
-    const summary = {
-      total: results.length,
-      passed: results.filter(r => r.success).length,
-      failed: results.filter(r => !r.success).length,
-      details: results
-    };
-
-    if (this.config.verbose) {
-      console.log('Test Report:', JSON.stringify(summary, null, 2));
-    }
-
-    return results;
   }
 }

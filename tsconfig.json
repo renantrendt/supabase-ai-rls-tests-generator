@@ -6,23 +6,21 @@
     "declaration": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "./",
+    "rootDir": ".",
     "strict": true,
     "moduleResolution": "node",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": ["node"],  // Remove jest from here
-    "allowJs": true
+    "types": ["node"]
   },
   "include": [
-    "src/**/*",
-    "bin/**/*"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
-    "**/*.test.ts"  // Exclude test files from main build
+    "tests"
   ]
 }

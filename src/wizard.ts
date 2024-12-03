@@ -4,12 +4,17 @@ import path from 'path';
 import readline from 'readline';
 import { spawn } from 'child_process';
 import chalk from 'chalk';
+import { createClient } from '@supabase/supabase-js';
 
 // Interfaces
 interface EnvVars {
   supabaseUrl: string;
   supabaseKey: string;
   claudeKey: string;
+}
+
+interface TableItem {
+  table_name: string;
 }
 
 // Constants
@@ -24,6 +29,46 @@ const rl = readline.createInterface({
 
 const question = (query: string): Promise<string> => 
   new Promise((resolve) => rl.question(query, resolve));
+
+async function getTables(supabase: any) {
+  try {
+    const { data, error } = await supabase.rpc('get_tables');
+
+    if (error && error.message.includes('function "get_tables" does not exist')) {
+      const { error: createError } = await supabase.rpc('exec_sql', {
+        sql: `
+          CREATE OR REPLACE FUNCTION get_tables()
+          RETURNS TABLE (table_name text) 
+          LANGUAGE plpgsql
+          SECURITY DEFINER 
+          AS $$
+          BEGIN
+              RETURN QUERY 
+              SELECT tablename::text
+              FROM pg_catalog.pg_tables
+              WHERE schemaname = 'public'
+              AND tablename NOT LIKE 'pg_%';
+          END;
+          $$;
+        `
+      });
+
+      if (createError) {
+        throw new Error(`Failed to create get_tables function: ${createError.message}`);
+      }
+
+      const { data: retryData, error: retryError } = await supabase.rpc('get_tables');
+      if (retryError) throw retryError;
+      return retryData ? retryData.map((item: TableItem) => item.table_name) : [];
+    }
+
+    if (error) throw error;
+    return data ? data.map((item: TableItem) => item.table_name) : [];
+  } catch (error) {
+    console.error(chalk.red('Error fetching tables:'), error);
+    return [];
+  }
+}
 
 // Helper Functions
 async function checkPermissions(directory: string): Promise<boolean> {
@@ -112,69 +157,11 @@ async function handleEnvVars(vars: EnvVars): Promise<void> {
   }
 }
 
-async function createTestFile(): Promise<void> {
-  const testFileContent = `// Load environment variables from .env.rls-test
-require('dotenv').config({ path: '.env.rls-test' });
-
-// Import the tester class
-const { SupabaseAITester } = require('supabase-ai-rls-tests-generator');
-
-// Create tester instance
-const tester = new SupabaseAITester({
-  supabaseUrl: process.env.SUPABASE_RLS_URL || '',
-  supabaseKey: process.env.SUPABASE_RLS_KEY || '',
-  claudeKey: process.env.SUPABASE_RLS_CLAUDE_KEY || '',
-  config: {
-    verbose: true
-  }
-});
-
-// Run the tests
-async function runTests() {
-  try {
-    // Change 'your_table_name' to the table you want to test
-    const results = await tester.runRLSTests('your_table_name');
-    console.log('Test Results:', results);
-  } catch (error) {
-    console.error('Test Error:', error);
-    process.exit(1);
-  }
-}
-
-runTests().catch(error => {
-  console.error('Test Error:', error);
-  process.exit(1);
-});`;
-
-  try {
-    await writeFile('rls-test.js', testFileContent);
-    console.log(chalk.green('✓ Created rls-test.js'));
-
-    // Update or create package.json if it exists
-    if (fs.existsSync('package.json')) {
-      const pkgJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-      if (!pkgJson.scripts) {
-        pkgJson.scripts = {};
-      }
-      
-      pkgJson.scripts['rls-test'] = 'node rls-test.js';
-      await writeFile('package.json', JSON.stringify(pkgJson, null, 2));
-      console.log(chalk.green('✓ Added rls-test script to package.json'));
-    }
-
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error(chalk.red('Error creating test file:'), error.message);
-    }
-    throw error;
-  }
-}
-
-async function runTests(): Promise<void> {
+async function runTests(tableName: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    console.log(chalk.blue('\nRunning tests automatically...'));
+    console.log(chalk.blue('\nRunning RLS Tests Runner...'));
     
-    const testProcess = spawn('node', ['rls-test.js'], {
+    const testProcess = spawn('node', ['--no-deprecation', 'rls-test.js', tableName], {
       stdio: 'inherit',
       env: { ...process.env }
     });
@@ -211,7 +198,6 @@ export async function wizard(): Promise<void> {
     console.log(`- User: ${process.env.USER || process.env.USERNAME}`);
     console.log(`- Working Directory: ${process.cwd()}`);
     
-    // Create directories first
     await createDirectories();
 
     console.log('\n📝 Setting up environment variables...');
@@ -221,33 +207,57 @@ export async function wizard(): Promise<void> {
       claudeKey: await question(chalk.bold('Enter Claude API key: '))
     };
 
-    // Handle environment variables
     await handleEnvVars(envVars);
 
-    // Create test file
-    await createTestFile();
+    // Criar cliente Supabase para buscar tabelas
+    const supabase = createClient(envVars.supabaseUrl, envVars.supabaseKey);
+
+    // Buscar e mostrar tabelas disponíveis
+    console.log(chalk.yellow('\nFetching available tables...'));
+    const tables = await getTables(supabase);
+    
+    if (tables.length === 0) {
+      console.log(chalk.red('\nNo tables found! Please check:'));
+      console.log(chalk.yellow('1. Your Supabase credentials are correct'));
+      console.log(chalk.yellow('2. You have tables in your public schema'));
+      console.log(chalk.yellow('3. You have necessary permissions'));
+      throw new Error('No tables available for testing');
+    }
+
+    console.log(chalk.green('\nAvailable tables:'));
+    tables.forEach((tableName: string, index: number) => {
+      console.log(chalk.blue(`${index + 1}. ${tableName}`));
+    });
+
+    const tableAnswer = await question(chalk.bold('\nSelect a table to test (enter number): '));
+    const selectedIndex = parseInt(tableAnswer) - 1;
+
+    if (isNaN(selectedIndex) || selectedIndex < 0 || selectedIndex >= tables.length) {
+      throw new Error('Invalid table selection');
+    }
+
+    const selectedTable = tables[selectedIndex];
 
     console.log(chalk.green.bold(`
 Setup Complete! 🎉
 
 Created files and directories:
-- .env.rls-test (separate environment file for RLS tests)
-- rls-test.js
+- .env.rls-test (environment file for RLS tests)
 - generated/
   ├── tests/
   └── results/
 
+Selected table: ${selectedTable}
+
 Next steps:
 1. Your environment variables are stored in .env.rls-test
-2. Edit rls-test.js to specify your table name
-3. Run tests with: node rls-test.js
-   Or: npm run rls-test
+2. Generated directories will store test cases and results
+3. Use 'npx test-rls' to run tests for specific tables
 `));
 
-    // Ask if they want to run tests now
     const runNow = await question(chalk.bold('Would you like to run the tests now? (y/n): '));
     if (runNow.toLowerCase() === 'y') {
-      await runTests();
+      await runTests(selectedTable);
     }
 
   } catch (error) {
