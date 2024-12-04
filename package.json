@@ -1,6 +1,6 @@
 {
   "name": "supabase-ai-rls-tests-generator",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Claude Sonnet will fetch your RLS policies from Supabase, then generate test cases (including edge cases), run the tests and save the tests and results specific files.",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
