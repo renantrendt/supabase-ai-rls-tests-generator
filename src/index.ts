@@ -198,7 +198,15 @@ export class SupabaseAITester {
   private async generateTestCases(policies: RLSPolicy[], config: TestConfig): Promise<TestCase[]> {
     try {
       const tableName = policies[0]?.table_name.split('.')[1] || 'unknown';
-      let promptContent = '';
+    // Calculate max_tokens based on test count
+    const tokensPerTest = 250; // Average tokens needed per test case
+    const baseTokens = 1000;   // Base tokens for prompt and overhead
+    const maxTokens = Math.max(
+      2000,
+      baseTokens + (config.testCount || 4) * tokensPerTest
+    );
+
+    let promptContent = '';
    
       switch(config.coverage) {
         case 'basic':
@@ -233,7 +241,7 @@ export class SupabaseAITester {
    
       const message = await this.claude.messages.create({
         model: "claude-3-sonnet-20240229",
-        max_tokens: 3000, // Increased for larger test sets
+        max_tokens: maxTokens, // Increased for larger test sets
         messages: [{
           role: "user",
           content: `Based on these RLS policies:
