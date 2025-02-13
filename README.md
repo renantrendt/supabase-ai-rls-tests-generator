@@ -2,6 +2,8 @@
 
 An AI-powered tool that automatically generates and runs comprehensive test cases for your Supabase Row Level Security (RLS) policies. Using Claude AI, it analyzes your policies and creates test scenarios to verify their effectiveness.
 
+Please share your feedback sending email to renan[at]renanserrano.com.br
+
 ## Features
 
 - 🤖 AI-powered test case generation
@@ -53,7 +55,7 @@ $$;
 
 1. Run the setup wizard:
 ```bash
-npx setup-tests
+npx setup-variables
 ```
 
 2. Enter your credentials when prompted:
